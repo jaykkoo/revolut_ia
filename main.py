@@ -61,20 +61,37 @@ class FragmentedModelManager:
         self.loaded = {}
 
     def load_fragment(self, i: int):
-        """Charge un fragment dans la VRAM."""
+        """Charge un fragment dans la VRAM ET ses buffers."""
         if i in self.loaded:
             return
-        self.layers[i].to(self.device)
-        self.loaded[i] = True
-        # print(f"Fragment {i} → GPU")
+        
+        layer = self.layers[i]
+
+        # Move weights
+        layer.to(self.device)
+
+        # Move all buffers (attention masks, rotary embeddings, etc.)
+        for name, buf in layer.named_buffers(recurse=True):
+            setattr(layer, name, buf.to(self.device))
+
+    self.loaded[i] = True
 
     def unload_fragment(self, i: int):
-        """Enlève un fragment de la VRAM."""
+        """Décharge un fragment en CPU."""
         if i not in self.loaded:
             return
-        self.layers[i].to("cpu")
+
+        layer = self.layers[i]
+
+        # Move weights
+        layer.to("cpu")
+
+        # Move buffers
+        for name, buf in layer.named_buffers(recurse=True):
+            setattr(layer, name, buf.to("cpu"))
+
         del self.loaded[i]
-        # print(f"Fragment {i} → CPU")
+
 
     def unload_all(self):
         """Vide toute la VRAM."""
