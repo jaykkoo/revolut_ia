@@ -39,7 +39,7 @@ if __name__ == "__main__":
         model="mistralai/Mistral-7B-Instruct-v0.3",
         dtype="float16",
         tokenizer_mode="mistral",    # FIX WARNING
-        gpu_memory_utilization=0.90  # fits in 10GB
+        gpu_memory_utilization=0.70  # fits in 10GB
     )
 
     sampling = SamplingParams(
