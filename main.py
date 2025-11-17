@@ -26,20 +26,21 @@ def mini_ai_optimize(prompt):
 
 
 ###########################################
-# 2) MAIN ENTRY (IMPORTANT!)
+# 2) MAIN ENTRY
 ###########################################
 
 if __name__ == "__main__":
 
     ###########################################
-    # 2) MISTRAL v0.3 (vLLM)
+    # 2) MISTRAL AWQ (vLLM)
     ###########################################
 
     llm = LLM(
-        model="mistralai/Mistral-7B-Instruct-v0.3",
-        dtype="float16",
-        tokenizer_mode="mistral",    # FIX WARNING
-        gpu_memory_utilization=0.70  # fits in 10GB
+        model="TheBloke/Mistral-7B-Instruct-v0.2-AWQ",
+        quantization="awq",          
+        dtype=None,                   # <- IMPORTANT FIX
+        tokenizer_mode="mistral",
+        gpu_memory_utilization=0.70
     )
 
     sampling = SamplingParams(
@@ -68,12 +69,12 @@ if __name__ == "__main__":
             f"{optimized}"
         )
 
-        print("\nMistral v0.3 en cours...")
+        print("\nMistral AWQ en cours...")
         result = llm.generate([final_prompt], sampling)[0].outputs[0].text
         return result
 
     ###########################################
-    # 4) TEST D'UTILISATION
+    # 4) TEST
     ###########################################
 
     code = generate_code(
