@@ -74,7 +74,7 @@ class FragmentedModelManager:
         for name, buf in layer.named_buffers(recurse=True):
             setattr(layer, name, buf.to(self.device))
 
-    self.loaded[i] = True
+        self.loaded[i] = True
 
     def unload_fragment(self, i: int):
         """Décharge un fragment en CPU."""
