@@ -38,7 +38,7 @@ if __name__ == "__main__":
     llm = LLM(
         model="TheBloke/Mistral-7B-Instruct-v0.2-AWQ",
         quantization="awq",          
-        dtype=None,                   # <- IMPORTANT FIX
+        dtype="auto",                   # <- IMPORTANT FIX
         tokenizer_mode="mistral",
         gpu_memory_utilization=0.70
     )
