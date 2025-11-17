@@ -1,10 +1,10 @@
 import torch
-import torch.nn as nn
 from transformers import AutoModelForCausalLM, AutoTokenizer
+from exllamav2 import ExLlamaV2, ExLlamaV2Tokenizer, ExLlamaV2Config, ExLlamaV2Generator
 
-##############################################
-# 1) MINI IA POUR PRÉDICTION / MANAGEMENT
-##############################################
+###############################################
+# 1) MINI IA - pour optimiser la demande
+###############################################
 
 mini_name = "Qwen/Qwen2-0.5B-Instruct"
 mini_tokenizer = AutoTokenizer.from_pretrained(mini_name)
@@ -12,183 +12,77 @@ mini_model = AutoModelForCausalLM.from_pretrained(
     mini_name, torch_dtype=torch.float16, device_map="auto"
 )
 
-def mini_ai_predict_fragments(user_prompt: str, num_layers: int):
-    """
-    La mini-IA prédit quelles couches du modèle seront les plus sollicitées.
-    Simple version basée sur tokens + heuristiques.
-    """
-
+def mini_ai_optimize(prompt):
     system = (
-        "Tu es un analyseur. Détermine quelles couches d'un LLM seront "
-        "les plus actives pour répondre à cette instruction."
-        "Renvoie une liste de numéros de couches pertinents."
+        "Réécris la demande de l'utilisateur pour un modèle spécialisé DRF. "
+        "Transforme-la en instruction claire, concise et structurée."
     )
 
-    prompt = f"{system}\nInstruction : {user_prompt}\nCouches pertinentes :"
+    prompt2 = f"{system}\n\nDemande utilisateur : {prompt}\n\nInstruction DRF optimisée :"
+    inputs = mini_tokenizer(prompt2, return_tensors="pt").to(mini_model.device)
 
-    inputs = mini_tokenizer(prompt, return_tensors="pt").to(mini_model.device)
-    out = mini_model.generate(**inputs, max_new_tokens=80, temperature=0.2)
-    text = mini_tokenizer.decode(out[0], skip_special_tokens=True)
-
-    # extraction naïve : chiffres trouvés dans la réponse
-    import re
-    nums = [int(x) for x in re.findall(r"\d+", text)]
-    return [n for n in nums if n < num_layers]
+    out = mini_model.generate(**inputs, max_new_tokens=200, temperature=0.2)
+    return mini_tokenizer.decode(out[0], skip_special_tokens=True)
 
 
-##############################################
-# 2) VRAM FRAGMENTÉE
-##############################################
+###############################################
+# 2) CONFIGURATION EXLLAMAV2
+###############################################
 
-class FragmentedModelManager:
-    """
-    Gère un modèle LLM fragmenté en plusieurs couches sur CPU ↔ GPU.
-    Inspiré des approches vLLM, DeepSpeed-Zero-Offload, ExLlama2.
-    """
+model_path = "./models/mistral/mistral-7b-instruct-v0.2.Q5_K_M.gguf"
 
-    def __init__(self, model):
-        self.model = model
-        self.layers = model.model.layers
-        self.num_layers = len(self.layers)
+config = ExLlamaV2Config(model_path)
+config.max_seq_len = 4096                   # supporte 10k+ si besoin
+config.gpu_split = [10.0]                   # 10 Go VRAM disponibles
+config.compress_pos_emb = False
 
-        print(f"[INFO] Modèle contenant {self.num_layers} fragments (layers).")
+# Charger modèle ExLlamaV2
+model = ExLlamaV2(config)
+model.load()
 
-        # Tout le monde sur CPU par défaut
-        for layer in self.layers:
-            layer.to("cpu")
+tokenizer = ExLlamaV2Tokenizer(config)
 
-        self.device = torch.device("cuda")
-        self.loaded = {}
-
-    def load_fragment(self, i: int):
-        """Charge un fragment dans la VRAM ET ses buffers."""
-        if i in self.loaded:
-            return
-        
-        layer = self.layers[i]
-
-        # Move weights
-        layer.to(self.device)
-
-        # Move all buffers (attention masks, rotary embeddings, etc.)
-        for name, buf in layer.named_buffers(recurse=True):
-            setattr(layer, name, buf.to(self.device))
-
-        self.loaded[i] = True
-
-    def unload_fragment(self, i: int):
-        """Décharge un fragment en CPU."""
-        if i not in self.loaded:
-            return
-
-        layer = self.layers[i]
-
-        # Move weights
-        layer.to("cpu")
-
-        # Move buffers
-        for name, buf in layer.named_buffers(recurse=True):
-            setattr(layer, name, buf.to("cpu"))
-
-        del self.loaded[i]
-
-
-    def unload_all(self):
-        """Vide toute la VRAM."""
-        for i in list(self.loaded.keys()):
-            self.unload_fragment(i)
-
-    def prefetch(self, layer_ids):
-        """
-        Pré-charge certains fragments prévus par la mini-IA.
-        """
-        for i in layer_ids:
-            self.load_fragment(i)
-
-    def forward(self, input_ids, attention_mask=None):
-        """
-        Exécution couche par couche :
-        Chargement dynamique + déchargement après utilisation
-        """
-        hidden = self.model.model.embed_tokens(input_ids.to(self.device))
-
-        for i, layer in enumerate(self.layers):
-
-            # Charger si pas déjà en VRAM
-            self.load_fragment(i)
-
-            # Exécuter
-            hidden = layer(hidden)[0]
-
-            # Décharger immédiatement
-            self.unload_fragment(i)
-
-        # head finale (non fragmentée)
-        logits = self.model.lm_head(hidden)
-        return logits
-
-
-##############################################
-# 3) CHARGEMENT DU MISTRAL 7B EN FRAGMENTS
-##############################################
-
-mistral_name = "mistralai/Mistral-7B-Instruct-v0.2"
-mistral_tokenizer = AutoTokenizer.from_pretrained(mistral_name)
-
-# On charge TOUT en CPU en 8-bit
-mistral_model = AutoModelForCausalLM.from_pretrained(
-    mistral_name,
-    load_in_8bit=True,           # ou load_in_4bit=True
-    device_map={"": "cpu"}       # important pour fragmentation
+# Générateur ExLlamaV2
+generator = ExLlamaV2Generator(
+    model,
+    tokenizer,
+    max_seq_len=4096,
+    max_gen_len=512
 )
 
-frag = FragmentedModelManager(mistral_model)
+generator.settings.temperature = 0.2
+generator.settings.top_p = 0.95
+generator.settings.top_k = 50
 
 
-##############################################
-# 4) PIPELINE COMPLET
-##############################################
+###############################################
+# 3) PIPELINE COMPLET
+###############################################
 
-def generate_code(user_prompt: str):
+def generate_code(prompt):
+    print("Mini IA en cours...")
+    optimized = mini_ai_optimize(prompt)
+    print("Instruction optimisée =", optimized)
 
-    # Analyse mini IA
-    predicted_layers = mini_ai_predict_fragments(
-        user_prompt, num_layers=frag.num_layers
+    final_prompt = (
+        "Tu es un expert Django REST Framework. Génère du code propre, clair, "
+        "commenté et fonctionnel. Utilise des sections : models.py, serializers.py, "
+        "views.py, urls.py.\n\n"
+        f"{optimized}"
     )
 
-    print("Couches prédites par la mini IA :", predicted_layers)
-
-    # Préfetch des fragments les plus importants
-    frag.prefetch(predicted_layers[:5])  # on limite
-
-    # Construire prompt Mistral
-    messages = [
-        {"role": "system", "content": "Tu es expert DRF, génère du code propre et complet."},
-        {"role": "user", "content": user_prompt}
-    ]
-    prompt = mistral_tokenizer.apply_chat_template(
-        messages, return_tensors="pt"
-    )
-
-    # Générer un token à la fois (démo)
-    input_ids = prompt.to(frag.device)
-
-    outputs = []
-    for _ in range(200):
-        logits = frag.forward(input_ids)
-        next_token = torch.argmax(logits[:, -1, :], dim=-1, keepdim=True)
-        input_ids = torch.cat([input_ids, next_token], dim=-1)
-        outputs.append(next_token.item())
-
-    text = mistral_tokenizer.decode(outputs)
-    return text
+    print("Mistral 7B ExLlamaV2 en cours...")
+    output = generator.generate(final_prompt)
+    return output
 
 
-##############################################
-# 5) EXEMPLE D’UTILISATION
-##############################################
+###############################################
+# 4) TEST
+###############################################
 
 if __name__ == "__main__":
-    out = generate_code("Créer une API DRF CRUD pour gérer un modèle Product(name, price, stock)")
+    result = generate_code(
+        "Créer une API DRF CRUD pour un modèle Product(name, price, stock)."
+    )
     print("\n===== CODE DRF GÉNÉRÉ =====\n")
-    print(out)
+    print(result)
