@@ -1,10 +1,10 @@
+from transformers import AutoTokenizer, AutoModelForCausalLM
+from vllm import LLM, SamplingParams
 import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer
-from exllamav2 import ExLlamaV2, ExLlamaV2Tokenizer, ExLlamaV2Config, ExLlamaV2Generator
 
-###############################################
-# 1) MINI IA - pour optimiser la demande
-###############################################
+###########################################
+# 1) MINI IA (Qwen 0.5B)
+###########################################
 
 mini_name = "Qwen/Qwen2-0.5B-Instruct"
 mini_tokenizer = AutoTokenizer.from_pretrained(mini_name)
@@ -14,75 +14,65 @@ mini_model = AutoModelForCausalLM.from_pretrained(
 
 def mini_ai_optimize(prompt):
     system = (
-        "Réécris la demande de l'utilisateur pour un modèle spécialisé DRF. "
-        "Transforme-la en instruction claire, concise et structurée."
+        "Réécris la demande en instruction précise pour générer du code Django REST Framework. "
+        "Inclue ce qu'il faut générer : model, serializer, views, urls. "
+        "Structure la requête de manière claire."
     )
 
-    prompt2 = f"{system}\n\nDemande utilisateur : {prompt}\n\nInstruction DRF optimisée :"
+    prompt2 = f"{system}\n\nDemande utilisateur : {prompt}\n\nInstruction optimisée :"
     inputs = mini_tokenizer(prompt2, return_tensors="pt").to(mini_model.device)
-
     out = mini_model.generate(**inputs, max_new_tokens=200, temperature=0.2)
     return mini_tokenizer.decode(out[0], skip_special_tokens=True)
 
 
-###############################################
-# 2) CONFIGURATION EXLLAMAV2
-###############################################
+###########################################
+# 2) MISTRAL v0.3 AVEC VLLM
+###########################################
 
-model_path = "./models/mistral/mistral-7b-instruct-v0.2.Q5_K_M.gguf"
-
-config = ExLlamaV2Config(model_path)
-config.max_seq_len = 4096                   # supporte 10k+ si besoin
-config.gpu_split = [10.0]                   # 10 Go VRAM disponibles
-config.compress_pos_emb = False
-
-# Charger modèle ExLlamaV2
-model = ExLlamaV2(config)
-model.load()
-
-tokenizer = ExLlamaV2Tokenizer(config)
-
-# Générateur ExLlamaV2
-generator = ExLlamaV2Generator(
-    model,
-    tokenizer,
-    max_seq_len=4096,
-    max_gen_len=512
+llm = LLM(
+    model="mistralai/Mistral-7B-Instruct-v0.3",
+    dtype="float16",            # automatic mixed precision
+    gpu_memory_utilization=0.90 # fits in 10GB
 )
 
-generator.settings.temperature = 0.2
-generator.settings.top_p = 0.95
-generator.settings.top_k = 50
+sampling = SamplingParams(
+    temperature=0.2,
+    top_p=0.95,
+    max_tokens=512
+)
 
-
-###############################################
+###########################################
 # 3) PIPELINE COMPLET
-###############################################
+###########################################
 
-def generate_code(prompt):
+def generate_code(user_prompt):
     print("Mini IA en cours...")
-    optimized = mini_ai_optimize(prompt)
-    print("Instruction optimisée =", optimized)
+    optimized = mini_ai_optimize(user_prompt)
+    print("Instruction optimisée :", optimized)
 
     final_prompt = (
-        "Tu es un expert Django REST Framework. Génère du code propre, clair, "
-        "commenté et fonctionnel. Utilise des sections : models.py, serializers.py, "
-        "views.py, urls.py.\n\n"
+        "Tu es un expert Django REST Framework. "
+        "Génère du code DRF complet, structuré en sections :\n"
+        "- models.py\n"
+        "- serializers.py\n"
+        "- views.py\n"
+        "- urls.py\n"
+        "Le code doit être exécutable.\n\n"
         f"{optimized}"
     )
 
-    print("Mistral 7B ExLlamaV2 en cours...")
-    output = generator.generate(final_prompt)
+    print("Mistral v0.3 en cours...")
+    output = llm.generate([final_prompt], sampling)[0].outputs[0].text
     return output
 
 
-###############################################
-# 4) TEST
-###############################################
+###########################################
+# TEST
+###########################################
 
 if __name__ == "__main__":
-    result = generate_code(
-        "Créer une API DRF CRUD pour un modèle Product(name, price, stock)."
+    code = generate_code(
+        "Crée une API DRF CRUD pour des produits (name, price, stock)."
     )
     print("\n===== CODE DRF GÉNÉRÉ =====\n")
-    print(result)
+    print(code)
